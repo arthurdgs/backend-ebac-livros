@@ -1,8 +1,28 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
+
+from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 
 app = FastAPI()
 livros = {}
+
+
+DATABASE_URL = "sqlite:///./biblioteca.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+class LivroDB(Base):
+    __tablename__ = 'livros'
+    id = Column(Integer, primary_key = True)
+    titulo = Column (String, unique = True , index = True )
+    autor = Column ( String , index = True )
+    ano_livro = Column (Integer)
 
 class Livro(BaseModel):
     titulo: str
@@ -10,23 +30,65 @@ class Livro(BaseModel):
     ano_livro: int
 
 
+Base.metadata.create_all(bind=engine)
+
+
+def sessao_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 # Adicionar livros
 
 @app.post("/adicionar_livro/")
-def adicionar_livro(id_livro: int, livro: Livro):
-    if id_livro in livros:
-        raise HTTPException(status_code=400, detail="Esse livro já existe")
-    else:
-        livros[id_livro] = livro.dict()
-        return {"message": "Livro adicionado com sucesso"}
+def adicionar_livro(livro: Livro, db: Session = Depends (sessao_db)):
+
+    db_livro = db.query(LivroDB).filter(LivroDB.nome == livro.nome).first()
+
+    if db_livro:
+        raise HTTPException(status_code=400, detail = 'Livro já cadastrado')
+
+    novo_livro = LivroDB (nome = livro.nome, titulo = livro.titulo , autor = livro.autor, ano_livro = livro.ano_livro)
+
+    db.add(novo_livro)
+    db.commit()
+    db.refresh(novo_livro)
+
+    return {'message: Livro Cadastrado com sucesso'}
 
 # listar livros
 
 @app.get("/livros/")
-def listar_livros():
-    return {"livros": livros}
+def listar_livros(ordenar_livros: int = 1, page: int = 1 , size: int = 10, db: Session = Depends(sessao_db)):
+    if page < 1 or size < 1: 
+        raise HTTPException (
+            status_code = 400, detail = 'Page ou Size estão com valores inválidos'
+        )
+    start = (page - 1) * size 
+    end = start + size
 
+    if ordenar_livros == 1: 
+        db_livro = db.query(LivroDB).order_by(LivroDB.titulo).offset(start).limit(size).all()
+
+    elif ordenar_livros == 2: 
+        db_livro = db.query(LivroDB).order_by(LivroDB.autor).offset(start).limit(size).all()
+
+    total_livros = db.query(LivroDB).count()
+
+    if not db_livro: 
+        return {'message: Nenhum Livro cadastrado'}
+
+    return {
+        'page': page,
+        'size': size,
+        'total': total_livros,
+        'Livros': [{'Livro: livro.titulo, 'autor': livro.autor, 'Ano': livro.ano '} for livro in db_livro]
+        
+    }
+
+    
 
 # Atualizar livros 
 
